@@ -65,14 +65,14 @@ class ChannelBot:
         
         # Message handlers (text and media)
         self.app.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND, 
+            filters.Text & ~filters.Command,
             self.handle_message
         ))
         
         self.app.add_handler(MessageHandler(
-            (filters.PHOTO | filters.VIDEO | filters.DOCUMENT | 
-             filters.AUDIO | filters.VOICE | filters.VIDEO_NOTE | 
-             filters.STICKER) & ~filters.COMMAND,
+            (filters.Photo.ALL | filters.Video.ALL | filters.Document.ALL |
+             filters.Audio.ALL | filters.Voice.ALL | filters.VideoNote.ALL |
+             filters.Sticker.ALL) & ~filters.Command,
             self.handle_message
         ))
         
