@@ -63,15 +63,16 @@ class ChannelBot:
         self.app.add_handler(CommandHandler("start", user_handlers.start_command))
         self.app.add_handler(CommandHandler("admin", admin_handlers.admin_command))
         
-        # Message handlers (text and media) - Fixed filter syntax
+        # Message handlers (text messages only) - Fixed filter syntax
         self.app.add_handler(MessageHandler(
             filters.TEXT & (~filters.COMMAND),
             self.handle_message
         ))
         
+        # Media message handlers - Fixed filter syntax
         self.app.add_handler(MessageHandler(
-            (filters.PHOTO | filters.VIDEO | filters.DOCUMENT |
-             filters.AUDIO | filters.VOICE | filters.VIDEO_NOTE |
+            (filters.PHOTO | filters.VIDEO | filters.Document.ALL |
+             filters.AUDIO | filters.VOICE | filters.VideoNote.ALL |
              filters.Sticker.ALL) & (~filters.COMMAND),
             self.handle_message
         ))
