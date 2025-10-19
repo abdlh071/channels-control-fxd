@@ -116,27 +116,76 @@ class UserHandlers:
             await update.message.reply_text(f"❌ حدث خطأ في جلب القنوات: {str(e)[:100]}")
     
     def _is_forwarded_message(self, message: Message) -> bool:
-        """Safely check if message is forwarded"""
+        """Safely check if message is forwarded using multiple methods"""
         try:
-            # Check if the message has forward_from_chat attribute and it's not None
-            return hasattr(message, 'forward_from_chat') and message.forward_from_chat is not None
-        except AttributeError:
-            logger.debug("Message object does not have forward_from_chat attribute")
+            # Method 1: Check forward_from_chat (most common for channel forwards)
+            if hasattr(message, 'forward_from_chat') and message.forward_from_chat is not None:
+                logger.debug(f"Message forwarded from chat: {message.forward_from_chat.id}")
+                return True
+            
+            # Method 2: Check forward_from (for user forwards)
+            if hasattr(message, 'forward_from') and message.forward_from is not None:
+                logger.debug(f"Message forwarded from user: {message.forward_from.id}")
+                return True
+            
+            # Method 3: Check forward_sender_name (for users with privacy settings)
+            if hasattr(message, 'forward_sender_name') and message.forward_sender_name is not None:
+                logger.debug(f"Message forwarded from sender: {message.forward_sender_name}")
+                return True
+            
+            # Method 4: Check forward_date (any forwarded message should have this)
+            if hasattr(message, 'forward_date') and message.forward_date is not None:
+                logger.debug(f"Message has forward_date: {message.forward_date}")
+                return True
+            
+            # Method 5: Check is_automatic_forward (for linked channel posts)
+            if hasattr(message, 'is_automatic_forward') and message.is_automatic_forward:
+                logger.debug("Message is automatic forward from linked channel")
+                return True
+            
+            # Log all available attributes for debugging
+            forward_attrs = []
+            for attr in ['forward_from_chat', 'forward_from', 'forward_sender_name', 'forward_date', 'is_automatic_forward']:
+                if hasattr(message, attr):
+                    value = getattr(message, attr)
+                    forward_attrs.append(f"{attr}={value}")
+            
+            logger.debug(f"Message forwarding attributes: {', '.join(forward_attrs) if forward_attrs else 'None'}")
+            
+            return False
+            
+        except AttributeError as e:
+            logger.debug(f"AttributeError when checking forwarded message: {e}")
             return False
         except Exception as e:
             logger.error(f"Error checking if message is forwarded: {e}")
             return False
     
     def _get_forwarded_chat(self, message: Message):
-        """Safely get forwarded chat from message"""
+        """Safely get forwarded chat from message using multiple methods"""
         try:
-            if hasattr(message, 'forward_from_chat'):
+            # Method 1: Try forward_from_chat first (channels/groups)
+            if hasattr(message, 'forward_from_chat') and message.forward_from_chat is not None:
+                logger.debug(f"Got forwarded chat via forward_from_chat: {message.forward_from_chat.id}")
                 return message.forward_from_chat
-            else:
-                logger.debug("Message does not have forward_from_chat attribute")
-                return None
-        except AttributeError:
-            logger.debug("AttributeError when accessing forward_from_chat")
+            
+            # Method 2: Try sender_chat (for messages sent on behalf of channels)
+            if hasattr(message, 'sender_chat') and message.sender_chat is not None:
+                logger.debug(f"Got sender chat: {message.sender_chat.id}")
+                return message.sender_chat
+            
+            # Method 3: If it's an automatic forward, try to get the chat info differently
+            if hasattr(message, 'is_automatic_forward') and message.is_automatic_forward:
+                # For automatic forwards, we might need to get chat info from the message itself
+                if hasattr(message, 'chat') and message.chat.type in ['channel', 'supergroup']:
+                    logger.debug(f"Got chat from automatic forward: {message.chat.id}")
+                    return message.chat
+            
+            logger.debug("Could not determine forwarded chat from message")
+            return None
+            
+        except AttributeError as e:
+            logger.debug(f"AttributeError when getting forwarded chat: {e}")
             return None
         except Exception as e:
             logger.error(f"Error getting forwarded chat: {e}")
@@ -155,7 +204,7 @@ class UserHandlers:
                 logger.debug(f"User {user_id} not in waiting_channel_forward state")
                 return
             
-            # Safely check if message is forwarded
+            # Enhanced forwarding check
             if not self._is_forwarded_message(update.message):
                 logger.info(f"Message from user {user_id} is not forwarded")
                 await update.message.reply_text(
@@ -163,17 +212,30 @@ class UserHandlers:
                     "لإعادة التوجيه:\n"
                     "1. افتح القناة التي تريد إضافتها\n"
                     "2. اختر أي رسالة واضغط 'Forward'\n"
-                    "3. اختر هذا البوت وارسلها"
+                    "3. اختر هذا البوت وارسلها\n\n"
+                    "📝 ملاحظة: تأكح من أن الرسالة مُعاد توجيهها من القناة وليس منسوخة"
                 )
                 return
             
-            # Safely get the forwarded chat
+            # Enhanced chat extraction
             chat = self._get_forwarded_chat(update.message)
             if not chat:
                 logger.error(f"Could not get forwarded chat from message for user {user_id}")
+                
+                # Try to extract more info for debugging
+                msg_info = []
+                for attr in ['forward_from_chat', 'forward_from', 'sender_chat', 'chat']:
+                    if hasattr(update.message, attr):
+                        value = getattr(update.message, attr)
+                        if value:
+                            msg_info.append(f"{attr}: {getattr(value, 'id', 'N/A')} ({getattr(value, 'type', 'N/A')})")
+                
+                logger.error(f"Available message info: {'; '.join(msg_info)}")
+                
                 await update.message.reply_text(
                     "❌ خطأ في قراءة بيانات الرسالة المُعاد توجيهها.\n\n"
-                    "يرجى المحاولة مرة أخرى أو التواصل مع المطور."
+                    "تأكد من أن الرسالة مُعاد توجيهها من قناة وليس منسوخة.\n\n"
+                    "إذا استمرت المشكلة، يرجى التواصل مع المطور."
                 )
                 return
             
