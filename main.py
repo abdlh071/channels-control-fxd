@@ -94,18 +94,24 @@ class ChannelBot:
         # Test command for debugging
         self.app.add_handler(CommandHandler("test", self.test_command))
         
-        # Message handlers (text messages only)
+        # Forwarded message handler with highest priority
         self.app.add_handler(MessageHandler(
-            filters.TEXT & (~filters.COMMAND),
-            self.handle_message
-        ))
+            filters.FORWARDED & (~filters.COMMAND),
+            self.handle_forwarded_message
+        ), group=0)
         
-        # Media message handlers
+        # Regular text message handlers
+        self.app.add_handler(MessageHandler(
+            filters.TEXT & (~filters.COMMAND) & (~filters.FORWARDED),
+            self.handle_text_message
+        ), group=1)
+        
+        # Media message handlers (photos, videos, documents, etc.)
         self.app.add_handler(MessageHandler(
             (filters.PHOTO | filters.VIDEO | filters.Document.ALL |
              filters.AUDIO | filters.VOICE | filters.Sticker.ALL) & (~filters.COMMAND),
             self.handle_message
-        ))
+        ), group=2)
         
         # Callback query handler
         self.app.add_handler(CallbackQueryHandler(callback_handlers.handle_callback))
@@ -115,17 +121,51 @@ class ChannelBot:
     async def test_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Test command to verify bot is working"""
         logger.info(f"Test command received from user {update.effective_user.id}")
+        
+        # Log message details for debugging
+        msg = update.message
+        msg_info = []
+        
+        # Check all forwarding-related attributes
+        forward_attrs = ['forward_from', 'forward_from_chat', 'forward_sender_name', 'forward_date', 'is_automatic_forward', 'sender_chat']
+        for attr in forward_attrs:
+            if hasattr(msg, attr):
+                value = getattr(msg, attr)
+                if value is not None:
+                    if hasattr(value, 'id'):
+                        msg_info.append(f"{attr}: {value.id} ({getattr(value, 'type', 'N/A')})")
+                    else:
+                        msg_info.append(f"{attr}: {value}")
+        
+        forward_info = "; ".join(msg_info) if msg_info else "غير معاد توجيهها"
+        
         await update.message.reply_text(
             f"✅ البوت يعمل بنجاح!\n\n"
             f"مرحباً {update.effective_user.first_name}\n"
             f"معرف المستخدم: {update.effective_user.id}\n"
-            f"وقت الاختبار: {update.message.date}"
+            f"وقت الاختبار: {update.message.date}\n\n"
+            f"معلومات الرسالة:\n{forward_info}"
         )
     
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Central message handler that routes to appropriate handlers"""
+    async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle forwarded messages specifically"""
         user_id = update.effective_user.id
-        logger.info(f"Message received from user {user_id}: {update.message.text or '[Media]'}")
+        logger.info(f"Forwarded message received from user {user_id}")
+        
+        # Log detailed forwarding info for debugging
+        msg = update.message
+        forward_info = []
+        
+        if hasattr(msg, 'forward_from_chat') and msg.forward_from_chat:
+            forward_info.append(f"من قناة: {msg.forward_from_chat.title} (ID: {msg.forward_from_chat.id})")
+        if hasattr(msg, 'forward_from') and msg.forward_from:
+            forward_info.append(f"من مستخدم: {msg.forward_from.first_name} (ID: {msg.forward_from.id})")
+        if hasattr(msg, 'sender_chat') and msg.sender_chat:
+            forward_info.append(f"قناة المرسل: {msg.sender_chat.title} (ID: {msg.sender_chat.id})")
+        if hasattr(msg, 'is_automatic_forward') and msg.is_automatic_forward:
+            forward_info.append("توجيه تلقائي من قناة مربوطة")
+        
+        logger.info(f"Forward details: {'; '.join(forward_info)}")
         
         # Check if admin is in broadcast mode
         if user_id in Config.ADMIN_USER_IDS:
@@ -134,7 +174,37 @@ class ChannelBot:
                 await admin_handlers.handle_broadcast_message(update, context)
                 return
         
-        # Regular message handling
+        # Regular forwarded message handling
+        await user_handlers.handle_text_message(update, context)
+    
+    async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle regular text messages (non-forwarded)"""
+        user_id = update.effective_user.id
+        logger.info(f"Text message received from user {user_id}: {update.message.text}")
+        
+        # Check if admin is in broadcast mode
+        if user_id in Config.ADMIN_USER_IDS:
+            admin_state = user_handlers.user_states.get(user_id, "")
+            if admin_state == "waiting_broadcast_message":
+                await admin_handlers.handle_broadcast_message(update, context)
+                return
+        
+        # Regular text message handling
+        await user_handlers.handle_text_message(update, context)
+    
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle media and other message types"""
+        user_id = update.effective_user.id
+        logger.info(f"Media message received from user {user_id}: {update.message.effective_attachment}")
+        
+        # Check if admin is in broadcast mode
+        if user_id in Config.ADMIN_USER_IDS:
+            admin_state = user_handlers.user_states.get(user_id, "")
+            if admin_state == "waiting_broadcast_message":
+                await admin_handlers.handle_broadcast_message(update, context)
+                return
+        
+        # Regular message handling for media
         await user_handlers.handle_text_message(update, context)
     
     async def start_scheduler(self):
