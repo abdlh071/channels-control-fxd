@@ -69,11 +69,10 @@ class ChannelBot:
             self.handle_message
         ))
         
-        # Media message handlers - Fixed filter syntax
+        # Media message handlers - Fixed filter syntax completely
         self.app.add_handler(MessageHandler(
             (filters.PHOTO | filters.VIDEO | filters.Document.ALL |
-             filters.AUDIO | filters.VOICE | filters.VideoNote.ALL |
-             filters.Sticker.ALL) & (~filters.COMMAND),
+             filters.AUDIO | filters.VOICE | filters.Sticker.ALL) & (~filters.COMMAND),
             self.handle_message
         ))
         
