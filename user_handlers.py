@@ -115,6 +115,33 @@ class UserHandlers:
             logger.error(f"Error in show_my_channels for user {update.effective_user.id}: {e}", exc_info=True)
             await update.message.reply_text(f"❌ حدث خطأ في جلب القنوات: {str(e)[:100]}")
     
+    def _is_forwarded_message(self, message: Message) -> bool:
+        """Safely check if message is forwarded"""
+        try:
+            # Check if the message has forward_from_chat attribute and it's not None
+            return hasattr(message, 'forward_from_chat') and message.forward_from_chat is not None
+        except AttributeError:
+            logger.debug("Message object does not have forward_from_chat attribute")
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if message is forwarded: {e}")
+            return False
+    
+    def _get_forwarded_chat(self, message: Message):
+        """Safely get forwarded chat from message"""
+        try:
+            if hasattr(message, 'forward_from_chat'):
+                return message.forward_from_chat
+            else:
+                logger.debug("Message does not have forward_from_chat attribute")
+                return None
+        except AttributeError:
+            logger.debug("AttributeError when accessing forward_from_chat")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting forwarded chat: {e}")
+            return None
+    
     async def handle_forwarded_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle forwarded messages to add channels"""
         try:
@@ -125,28 +152,62 @@ class UserHandlers:
             user_id = update.effective_user.id
             
             if self.user_states.get(user_id) != "waiting_channel_forward":
+                logger.debug(f"User {user_id} not in waiting_channel_forward state")
                 return
             
-            if not update.message.forward_from_chat:
-                await update.message.reply_text("❌ يجب إعادة توجيه رسالة من القناة التي تريد إضافتها.")
+            # Safely check if message is forwarded
+            if not self._is_forwarded_message(update.message):
+                logger.info(f"Message from user {user_id} is not forwarded")
+                await update.message.reply_text(
+                    "❌ يجب إعادة توجيه رسالة من القناة التي تريد إضافتها.\n\n"
+                    "لإعادة التوجيه:\n"
+                    "1. افتح القناة التي تريد إضافتها\n"
+                    "2. اختر أي رسالة واضغط 'Forward'\n"
+                    "3. اختر هذا البوت وارسلها"
+                )
                 return
             
-            chat = update.message.forward_from_chat
+            # Safely get the forwarded chat
+            chat = self._get_forwarded_chat(update.message)
+            if not chat:
+                logger.error(f"Could not get forwarded chat from message for user {user_id}")
+                await update.message.reply_text(
+                    "❌ خطأ في قراءة بيانات الرسالة المُعاد توجيهها.\n\n"
+                    "يرجى المحاولة مرة أخرى أو التواصل مع المطور."
+                )
+                return
             
-            # Check if it's a channel
+            logger.info(f"Processing forwarded message from chat: {chat.type}, ID: {chat.id}, Title: {getattr(chat, 'title', 'N/A')}")
+            
+            # Check if it's a channel or supergroup
             if chat.type not in ['channel', 'supergroup']:
-                await update.message.reply_text("❌ يمكن إضافة القنوات والمجموعات العامة فقط.")
+                logger.info(f"Chat type {chat.type} not supported for user {user_id}")
+                await update.message.reply_text(
+                    f"❌ يمكن إضافة القنوات والمجموعات العامة فقط.\n\n"
+                    f"نوع المحادثة المُرسلة: {chat.type}\n\n"
+                    "الأنواع المدعومة: channel, supergroup"
+                )
                 return
             
             channel_tg_id = chat.id
-            channel_name = sanitize_channel_name(chat.title or "قناة غير محددة")
+            channel_name = sanitize_channel_name(getattr(chat, 'title', None) or "قناة غير محددة")
             
-            logger.info(f"User {user_id} attempting to add channel {channel_name} (ID: {channel_tg_id})")
+            logger.info(f"User {user_id} attempting to add channel '{channel_name}' (ID: {channel_tg_id})")
             
             # Check if channel already exists
-            existing_channel = await db.get_channel_by_tg_id(channel_tg_id)
-            if existing_channel:
-                await update.message.reply_text(f"❌ القناة '{channel_name}' مضافة مسبقاً للبوت.")
+            try:
+                existing_channel = await db.get_channel_by_tg_id(channel_tg_id)
+                if existing_channel:
+                    logger.info(f"Channel {channel_name} already exists for user {user_id}")
+                    await update.message.reply_text(f"❌ القناة '{channel_name}' مضافة مسبقاً للبوت.")
+                    self.user_states.pop(user_id, None)
+                    return
+            except Exception as db_check_error:
+                logger.error(f"Error checking existing channel: {db_check_error}")
+                await update.message.reply_text(
+                    f"❌ خطأ في فحص قاعدة البيانات: {str(db_check_error)[:100]}\n\n"
+                    "يرجى المحاولة لاحقاً."
+                )
                 self.user_states.pop(user_id, None)
                 return
             
@@ -168,7 +229,7 @@ class UserHandlers:
                     return
                 
                 # Check if bot can send messages (for channels)
-                if chat.type == 'channel' and not bot_member.can_post_messages:
+                if chat.type == 'channel' and not getattr(bot_member, 'can_post_messages', False):
                     await update.message.reply_text(
                         f"❌ البوت لا يملك صلاحية إرسال الرسائل في القناة '{channel_name}'.\n\n"
                         "يرجى إعطاء البوت صلاحية 'إرسال الرسائل' من إعدادات المشرفين."
@@ -177,6 +238,7 @@ class UserHandlers:
                     return
                     
             except Forbidden:
+                logger.warning(f"Bot is forbidden in channel {channel_name} for user {user_id}")
                 await update.message.reply_text(
                     f"❌ البوت محظور أو غير موجود في القناة '{channel_name}'.\n\n"
                     "يرجى:\n"
@@ -187,6 +249,7 @@ class UserHandlers:
                 self.user_states.pop(user_id, None)
                 return
             except BadRequest as e:
+                logger.error(f"BadRequest when checking bot permissions: {e}")
                 await update.message.reply_text(
                     f"❌ خطأ في الوصول للقناة '{channel_name}'.\n\n"
                     f"تفاصيل الخطأ: {str(e)}\n\n"
@@ -195,6 +258,7 @@ class UserHandlers:
                 self.user_states.pop(user_id, None)
                 return
             except TelegramError as e:
+                logger.error(f"TelegramError when checking bot permissions: {e}")
                 await update.message.reply_text(
                     f"❌ فشل التحقق من القناة '{channel_name}'.\n\n"
                     f"رمز الخطأ: {type(e).__name__}\n"
@@ -250,16 +314,25 @@ class UserHandlers:
             
             if not state:
                 # Handle forwarded messages for channel addition
-                if update.message.forward_from_chat:
+                if self._is_forwarded_message(update.message):
                     await self.handle_forwarded_message(update, context)
+                else:
+                    # No state and not forwarded, show helpful message
+                    await update.message.reply_text(
+                        "😊 مرحباً! استخدم الأزرار أدناه للتنقل في البوت."
+                    )
                 return
             
             if state == "waiting_channel_forward":
-                if update.message.forward_from_chat:
+                if self._is_forwarded_message(update.message):
                     await self.handle_forwarded_message(update, context)
                 else:
                     await update.message.reply_text(
                         "❌ يجب إعادة توجيه رسالة من القناة.\n\n"
+                        "لإعادة التوجيه:\n"
+                        "1. افتح القناة التي تريد إضافتها\n"
+                        "2. اختر أي رسالة واضغط 'Forward'\n"
+                        "3. اختر هذا البوت وارسلها\n\n"
                         "للإلغاء، اضغط زر 'إلغاء' أو اكتب /start"
                     )
             
